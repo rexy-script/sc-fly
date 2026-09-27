@@ -1,10 +1,11 @@
 --[[
-    IRON GATE HUB v1.0
+    IRON ADMIN PANEL v1.0
     Target: Roblox (Client-side)
     Executor: Delta (mobile-compatible)
-    Features: Fly, Translucent (Local Invisibility)
+    Features: Fly, Noclip, Speed, JumpPower, Infinite Jump, Teleport,
+              Godmode (local), Fullbright, ESP, Freeze, Rejoin, Reset
     Author: Axiom / Kyler
-    Simulation: IRON-GATE-RBX-LUA-004
+    Simulation: IRON-GATE-RBX-ADMIN-005
 ]]
 
 -- =====================================================================
@@ -13,9 +14,10 @@
 local Players           = game:GetService("Players")
 local RunService        = game:GetService("RunService")
 local UserInputService  = game:GetService("UserInputService")
-local TweenService      = game:GetService("TweenService")
-local CoreGui           = game:GetService("CoreGui")
+local Lighting          = game:GetService("Lighting")
 local StarterGui        = game:GetService("StarterGui")
+local TeleportService   = game:GetService("TeleportService")
+local TweenService      = game:GetService("TweenService")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera      = workspace.CurrentCamera
@@ -24,473 +26,636 @@ local Camera      = workspace.CurrentCamera
 -- STATE
 -- =====================================================================
 local State = {
-    Fly         = false,
-    Translucent = false,
-    FlySpeed    = 50,
-    Transparency = 0.5,
+    Fly          = false,
+    Noclip       = false,
+    InfiniteJump = false,
+    Godmode      = false,
+    Fullbright   = false,
+    ESP          = false,
+    Frozen       = false,
+    WalkSpeed    = 16,
+    JumpPower    = 50,
+    FlySpeed     = 60,
 }
 
--- Store original transparency for restore
-local OriginalTransparency = {}
+-- Connections
+local Connections = {
+    Fly = nil,
+    Noclip = nil,
+    InfiniteJump = nil,
+    ESP = nil,
+}
 
--- Fly connection handle
-local FlyConnection = nil
-local FlyBodyVelocity = nil
-local FlyBodyGyro = nil
+-- Fly objects
+local FlyBV, FlyBG = nil, nil
+
+-- ESP objects
+local ESPObjects = {}
+
+-- Original lighting state
+local OriginalLighting = {
+    Ambient = Lighting.Ambient,
+    OutdoorAmbient = Lighting.OutdoorAmbient,
+    Brightness = Lighting.Brightness,
+    ClockTime = Lighting.ClockTime,
+    FogEnd = Lighting.FogEnd,
+}
 
 -- =====================================================================
--- UTILITY: SAFE UI PARENTING
+-- UTILITY: UI PARENT
 -- =====================================================================
 local function getUIParent()
-    -- Try gethui (Delta supports it), fallback to CoreGui, then PlayerGui
     if gethui then
         local ok, hui = pcall(gethui)
         if ok and hui then return hui end
     end
-    local ok, cg = pcall(function() return CoreGui end)
+    local ok, cg = pcall(function() return game:GetService("CoreGui") end)
     if ok and cg then return cg end
     return LocalPlayer:WaitForChild("PlayerGui")
 end
 
+local function getChar()
+    return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+end
+
+local function getHRP()
+    local char = getChar()
+    return char:FindFirstChild("HumanoidRootPart")
+end
+
+local function getHumanoid()
+    local char = getChar()
+    return char:FindFirstChildOfClass("Humanoid")
+end
+
+local function notify(title, text, duration)
+    pcall(function()
+        StarterGui:SetCore("SendNotification", {
+            Title = title,
+            Text = text,
+            Duration = duration or 3,
+        })
+    end)
+end
+
 -- =====================================================================
--- FEATURE 1: FLY
+-- FEATURE: FLY
 -- =====================================================================
 local function startFly()
-    local character = LocalPlayer.Character
-    if not character then return end
+    local hrp = getHRP()
+    local hum = getHumanoid()
+    if not hrp or not hum then return end
 
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
-    local rootPart = character:FindFirstChild("HumanoidRootPart")
-    if not humanoid or not rootPart then return end
-
-    -- Remove existing velocity objects if any
-    for _, obj in ipairs(rootPart:GetChildren()) do
-        if obj:IsA("BodyVelocity") or obj:IsA("BodyGyro") then
-            obj:Destroy()
-        end
+    for _, o in ipairs(hrp:GetChildren()) do
+        if o:IsA("BodyVelocity") or o:IsA("BodyGyro") then o:Destroy() end
     end
 
-    -- Create BodyVelocity for movement
-    local bv = Instance.new("BodyVelocity")
-    bv.MaxForce = Vector3.new(1e5, 1e5, 1e5)
-    bv.Velocity = Vector3.zero
-    bv.Parent = rootPart
+    FlyBV = Instance.new("BodyVelocity")
+    FlyBV.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+    FlyBV.Velocity = Vector3.zero
+    FlyBV.Parent = hrp
 
-    local bg = Instance.new("BodyGyro")
-    bg.MaxTorque = Vector3.new(1e5, 1e5, 1e5)
-    bg.P = 1e4
-    bg.Parent = rootPart
+    FlyBG = Instance.new("BodyGyro")
+    FlyBG.MaxTorque = Vector3.new(1e5, 1e5, 1e5)
+    FlyBG.P = 1e4
+    FlyBG.Parent = hrp
 
-    FlyBodyVelocity = bv
-    FlyBodyGyro = bg
+    hum.PlatformStand = true
+    hum:ChangeState(Enum.HumanoidStateType.Physics)
 
-    -- Adjust humanoid state to allow flight
-    humanoid.PlatformStand = true
-    humanoid:ChangeState(Enum.HumanoidStateType.Physics)
-
-    -- Connection: update velocity every frame
-    FlyConnection = RunService.RenderStepped:Connect(function()
+    Connections.Fly = RunService.RenderStepped:Connect(function()
         if not State.Fly then return end
         local cam = workspace.CurrentCamera
-        local moveDir = Vector3.zero
+        local dir = Vector3.zero
 
-        -- Keyboard input (PC)
-        if UserInputService:IsKeyDown(Enum.KeyCode.W) then
-            moveDir = moveDir + cam.CFrame.LookVector
-        end
-        if UserInputService:IsKeyDown(Enum.KeyCode.S) then
-            moveDir = moveDir - cam.CFrame.LookVector
-        end
-        if UserInputService:IsKeyDown(Enum.KeyCode.A) then
-            moveDir = moveDir - cam.CFrame.RightVector
-        end
-        if UserInputService:IsKeyDown(Enum.KeyCode.D) then
-            moveDir = moveDir + cam.CFrame.RightVector
-        end
-        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
-            moveDir = moveDir + Vector3.new(0, 1, 0)
-        end
-        if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
-            moveDir = moveDir - Vector3.new(0, 1, 0)
-        end
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir = dir + cam.CFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir = dir - cam.CFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then dir = dir - cam.CFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then dir = dir + cam.CFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then dir = dir + Vector3.new(0,1,0) end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then dir = dir - Vector3.new(0,1,0) end
 
-        -- Mobile: use camera direction + on-screen joystick
-        local moveVector = humanoid.MoveDirection
-        if moveVector.Magnitude > 0 then
-            moveDir = moveDir + moveVector
-        end
+        local mv = hum.MoveDirection
+        if mv.Magnitude > 0 then dir = dir + mv end
 
-        if moveDir.Magnitude > 0 then
-            bv.Velocity = moveDir.Unit * State.FlySpeed
-        else
-            bv.Velocity = Vector3.zero
-        end
-
-        bg.CFrame = cam.CFrame
+        FlyBV.Velocity = dir.Magnitude > 0 and (dir.Unit * State.FlySpeed) or Vector3.zero
+        FlyBG.CFrame = cam.CFrame
     end)
 end
 
 local function stopFly()
-    if FlyConnection then
-        FlyConnection:Disconnect()
-        FlyConnection = nil
+    if Connections.Fly then Connections.Fly:Disconnect() Connections.Fly = nil end
+    if FlyBV then FlyBV:Destroy() FlyBV = nil end
+    if FlyBG then FlyBG:Destroy() FlyBG = nil end
+    local hum = getHumanoid()
+    if hum then
+        hum.PlatformStand = false
+        hum:ChangeState(Enum.HumanoidStateType.GettingUp)
     end
-    if FlyBodyVelocity then
-        FlyBodyVelocity:Destroy()
-        FlyBodyVelocity = nil
-    end
-    if FlyBodyGyro then
-        FlyBodyGyro:Destroy()
-        FlyBodyGyro = nil
-    end
-    local character = LocalPlayer.Character
-    if character then
-        local humanoid = character:FindFirstChildOfClass("Humanoid")
-        if humanoid then
-            humanoid.PlatformStand = false
-            humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+end
+
+-- =====================================================================
+-- FEATURE: NOCLIP
+-- =====================================================================
+local function startNoclip()
+    Connections.Noclip = RunService.Stepped:Connect(function()
+        if not State.Noclip then return end
+        local char = LocalPlayer.Character
+        if not char then return end
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") and part.CanCollide then
+                part.CanCollide = false
+            end
+        end
+    end)
+end
+
+local function stopNoclip()
+    if Connections.Noclip then Connections.Noclip:Disconnect() Connections.Noclip = nil end
+    local char = LocalPlayer.Character
+    if char then
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.CanCollide = true
+            end
         end
     end
 end
 
 -- =====================================================================
--- FEATURE 2: TRANSLUCENT (LOCAL INVISIBILITY)
+-- FEATURE: INFINITE JUMP
 -- =====================================================================
-local function applyTransparency(instance, value)
-    if not instance then return end
-    for _, part in ipairs(instance:GetDescendants()) do
-        if part:IsA("BasePart") then
-            if OriginalTransparency[part] == nil then
-                OriginalTransparency[part] = part.Transparency
-            end
-            part.Transparency = value
-        elseif part:IsA("Decal") then
-            if OriginalTransparency[part] == nil then
-                OriginalTransparency[part] = part.Transparency
-            end
-            part.Transparency = value
+local function startInfiniteJump()
+    Connections.InfiniteJump = UserInputService.JumpRequest:Connect(function()
+        if not State.InfiniteJump then return end
+        local hum = getHumanoid()
+        if hum then
+            hum:ChangeState(Enum.HumanoidStateType.Jumping)
         end
-    end
-    if instance:IsA("BasePart") then
-        if OriginalTransparency[instance] == nil then
-            OriginalTransparency[instance] = instance.Transparency
-        end
-        instance.Transparency = value
+    end)
+end
+
+local function stopInfiniteJump()
+    if Connections.InfiniteJump then
+        Connections.InfiniteJump:Disconnect()
+        Connections.InfiniteJump = nil
     end
 end
 
-local function startTranslucent()
-    local character = LocalPlayer.Character
-    if not character then return end
-
-    applyTransparency(character, State.Transparency)
-
-    -- Watch for respawns/character changes
-    if not State._CharConnection then
-        State._CharConnection = LocalPlayer.CharacterAdded:Connect(function(newChar)
-            task.wait(0.5)
-            if State.Translucent then
-                applyTransparency(newChar, State.Transparency)
+-- =====================================================================
+-- FEATURE: GODMODE (LOCAL VISUAL)
+-- =====================================================================
+local function startGodmode()
+    local hum = getHumanoid()
+    if hum then
+        hum.MaxHealth = math.huge
+        hum.Health = math.huge
+        hum.NameDisplayDistance = 0
+    end
+    -- Re-apply on respawn via loop
+    if not State._GodmodeLoop then
+        State._GodmodeLoop = task.spawn(function()
+            while State.Godmode do
+                local h = getHumanoid()
+                if h then
+                    h.MaxHealth = math.huge
+                    h.Health = math.huge
+                end
+                task.wait(0.5)
             end
         end)
     end
 end
 
-local function stopTranslucent()
-    local character = LocalPlayer.Character
-    if character then
-        applyTransparency(character, 0)  -- Restore to opaque
+local function stopGodmode()
+    State._GodmodeLoop = nil
+    local hum = getHumanoid()
+    if hum then
+        hum.MaxHealth = 100
+        hum.Health = 100
+        hum.NameDisplayDistance = 100
     end
-    -- Restore original values
-    for part, orig in pairs(OriginalTransparency) do
-        if part and part.Parent then
-            pcall(function() part.Transparency = orig end)
-        end
-    end
-    OriginalTransparency = {}
 end
 
 -- =====================================================================
--- UI BUILDER (Mobile-friendly, lightweight)
+-- FEATURE: FULLBRIGHT
+-- =====================================================================
+local function startFullbright()
+    Lighting.Ambient = Color3.fromRGB(255,255,255)
+    Lighting.OutdoorAmbient = Color3.fromRGB(255,255,255)
+    Lighting.Brightness = 3
+    Lighting.ClockTime = 12
+    Lighting.FogEnd = 100000
+end
+
+local function stopFullbright()
+    Lighting.Ambient = OriginalLighting.Ambient
+    Lighting.OutdoorAmbient = OriginalLighting.OutdoorAmbient
+    Lighting.Brightness = OriginalLighting.Brightness
+    Lighting.ClockTime = OriginalLighting.ClockTime
+    Lighting.FogEnd = OriginalLighting.FogEnd
+end
+
+-- =====================================================================
+-- FEATURE: ESP (PLAYER HIGHLIGHT)
+-- =====================================================================
+local function createESP(player)
+    if player == LocalPlayer then return end
+    local char = player.Character
+    if not char then return end
+
+    local highlight = Instance.new("Highlight")
+    highlight.Name = "IronESP"
+    highlight.FillColor = Color3.fromRGB(255, 0, 0)
+    highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+    highlight.FillTransparency = 0.5
+    highlight.OutlineTransparency = 0
+    highlight.Adornee = char
+    highlight.Parent = char
+    ESPObjects[player] = highlight
+end
+
+local function removeESP(player)
+    if ESPObjects[player] then
+        ESPObjects[player]:Destroy()
+        ESPObjects[player] = nil
+    end
+end
+
+local function startESP()
+    for _, p in ipairs(Players:GetPlayers()) do
+        createESP(p)
+        p.CharacterAdded:Connect(function(c)
+            if State.ESP then
+                task.wait(0.5)
+                createESP(p)
+            end
+        end)
+    end
+    Connections.ESP = Players.PlayerAdded:Connect(function(p)
+        if State.ESP then createESP(p) end
+    end)
+end
+
+local function stopESP()
+    for p, h in pairs(ESPObjects) do
+        if h then h:Destroy() end
+    end
+    ESPObjects = {}
+    if Connections.ESP then Connections.ESP:Disconnect() Connections.ESP = nil end
+end
+
+-- =====================================================================
+-- FEATURE: FREEZE (LOCAL ANCHOR)
+-- =====================================================================
+local function setFrozen(freeze)
+    local hrp = getHRP()
+    if hrp then
+        hrp.Anchored = freeze
+    end
+    State.Frozen = freeze
+end
+
+-- =====================================================================
+-- FEATURE: TELEPORT TO COORDINATES
+-- =====================================================================
+local function teleportTo(x, y, z)
+    local hrp = getHRP()
+    if hrp then
+        hrp.CFrame = CFrame.new(x, y, z)
+    end
+end
+
+-- =====================================================================
+-- FEATURE: SPEED / JUMP
+-- =====================================================================
+local function applySpeed(val)
+    local hum = getHumanoid()
+    if hum then hum.WalkSpeed = val end
+    State.WalkSpeed = val
+end
+
+local function applyJump(val)
+    local hum = getHumanoid()
+    if hum then hum.JumpPower = val; hum.UseJumpPower = true end
+    State.JumpPower = val
+end
+
+-- =====================================================================
+-- UI BUILDER
 -- =====================================================================
 local function createUI()
     local parent = getUIParent()
 
-    -- Destroy old UI if exists
-    if parent:FindFirstChild("IronGateHub") then
-        parent.IronGateHub:Destroy()
+    if parent:FindFirstChild("IronAdminPanel") then
+        parent.IronAdminPanel:Destroy()
     end
 
-    -- Main ScreenGui
     local gui = Instance.new("ScreenGui")
-    gui.Name = "IronGateHub"
+    gui.Name = "IronAdminPanel"
     gui.ResetOnSpawn = false
     gui.IgnoreGuiInset = true
     gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     gui.Parent = parent
 
-    -- Draggable toggle button (minimized state)
-    local toggleBtn = Instance.new("TextButton")
-    toggleBtn.Name = "ToggleBtn"
-    toggleBtn.Size = UDim2.new(0, 60, 0, 60)
-    toggleBtn.Position = UDim2.new(0, 20, 0.5, -30)
-    toggleBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
-    toggleBtn.BackgroundTransparency = 0.1
-    toggleBtn.Text = "IG"
-    toggleBtn.TextColor3 = Color3.fromRGB(0, 200, 255)
-    toggleBtn.TextScaled = true
-    toggleBtn.Font = Enum.Font.GothamBold
-    toggleBtn.BorderSizePixel = 0
-    toggleBtn.Parent = gui
+    -- Toggle button
+    local toggle = Instance.new("TextButton")
+    toggle.Size = UDim2.new(0, 60, 0, 60)
+    toggle.Position = UDim2.new(0, 15, 0.4, 0)
+    toggle.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+    toggle.Text = "ADMIN"
+    toggle.TextColor3 = Color3.fromRGB(0, 220, 255)
+    toggle.TextScaled = true
+    toggle.Font = Enum.Font.GothamBold
+    toggle.BorderSizePixel = 0
+    toggle.Parent = gui
+    local tc = Instance.new("UICorner") tc.CornerRadius = UDim.new(0,12) tc.Parent = toggle
 
-    local toggleCorner = Instance.new("UICorner")
-    toggleCorner.CornerRadius = UDim.new(0, 12)
-    toggleCorner.Parent = toggleBtn
+    -- Main panel
+    local panel = Instance.new("Frame")
+    panel.Size = UDim2.new(0, 300, 0, 420)
+    panel.Position = UDim2.new(0.5, -150, 0.5, -210)
+    panel.BackgroundColor3 = Color3.fromRGB(18, 18, 26)
+    panel.BorderSizePixel = 0
+    panel.Visible = false
+    panel.Active = true
+    panel.Draggable = true
+    panel.Parent = gui
+    local pc = Instance.new("UICorner") pc.CornerRadius = UDim.new(0,12) pc.Parent = panel
+    local ps = Instance.new("UIStroke") ps.Color = Color3.fromRGB(0,220,255) ps.Thickness = 1.5 ps.Transparency = 0.4 ps.Parent = panel
 
-    -- Main frame
-    local frame = Instance.new("Frame")
-    frame.Name = "MainFrame"
-    frame.Size = UDim2.new(0, 280, 0, 320)
-    frame.Position = UDim2.new(0.5, -140, 0.5, -160)
-    frame.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
-    frame.BackgroundTransparency = 0.05
-    frame.BorderSizePixel = 0
-    frame.Visible = false
-    frame.Active = true
-    frame.Draggable = true
-    frame.Parent = gui
-
-    local frameCorner = Instance.new("UICorner")
-    frameCorner.CornerRadius = UDim.new(0, 12)
-    frameCorner.Parent = frame
-
-    local frameStroke = Instance.new("UIStroke")
-    frameStroke.Color = Color3.fromRGB(0, 200, 255)
-    frameStroke.Thickness = 1.5
-    frameStroke.Transparency = 0.5
-    frameStroke.Parent = frame
-
-    -- Title
-    local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(1, 0, 0, 40)
-    title.Position = UDim2.new(0, 0, 0, 0)
-    title.BackgroundTransparency = 1
-    title.Text = "⚡ IRON GATE HUB"
-    title.TextColor3 = Color3.fromRGB(0, 200, 255)
-    title.TextScaled = false
-    title.TextSize = 20
-    title.Font = Enum.Font.GothamBold
-    title.Parent = frame
+    -- Header
+    local header = Instance.new("TextLabel")
+    header.Size = UDim2.new(1, 0, 0, 42)
+    header.BackgroundTransparency = 1
+    header.Text = "⚡ IRON ADMIN PANEL"
+    header.TextColor3 = Color3.fromRGB(0, 220, 255)
+    header.TextSize = 18
+    header.Font = Enum.Font.GothamBold
+    header.Parent = panel
 
     -- Close button
-    local closeBtn = Instance.new("TextButton")
-    closeBtn.Size = UDim2.new(0, 30, 0, 30)
-    closeBtn.Position = UDim2.new(1, -35, 0, 5)
-    closeBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-    closeBtn.Text = "X"
-    closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    closeBtn.TextSize = 14
-    closeBtn.Font = Enum.Font.GothamBold
-    closeBtn.BorderSizePixel = 0
-    closeBtn.Parent = frame
+    local close = Instance.new("TextButton")
+    close.Size = UDim2.new(0, 30, 0, 30)
+    close.Position = UDim2.new(1, -36, 0, 6)
+    close.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+    close.Text = "X"
+    close.TextColor3 = Color3.fromRGB(255,255,255)
+    close.TextSize = 14
+    close.Font = Enum.Font.GothamBold
+    close.BorderSizePixel = 0
+    close.Parent = panel
+    local cc = Instance.new("UICorner") cc.CornerRadius = UDim.new(0,8) cc.Parent = close
 
-    local closeCorner = Instance.new("UICorner")
-    closeCorner.CornerRadius = UDim.new(0, 8)
-    closeCorner.Parent = closeBtn
+    -- Scrolling container
+    local scroll = Instance.new("ScrollingFrame")
+    scroll.Size = UDim2.new(1, -20, 1, -55)
+    scroll.Position = UDim2.new(0, 10, 0, 48)
+    scroll.BackgroundTransparency = 1
+    scroll.BorderSizePixel = 0
+    scroll.ScrollBarThickness = 4
+    scroll.ScrollBarImageColor3 = Color3.fromRGB(0, 220, 255)
+    scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    scroll.Parent = panel
 
-    -- Section: Fly
-    local flyBtn = Instance.new("TextButton")
-    flyBtn.Size = UDim2.new(0.9, 0, 0, 45)
-    flyBtn.Position = UDim2.new(0.05, 0, 0, 60)
-    flyBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
-    flyBtn.Text = "✈ FLY: OFF"
-    flyBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
-    flyBtn.TextSize = 16
-    flyBtn.Font = Enum.Font.GothamSemibold
-    flyBtn.BorderSizePixel = 0
-    flyBtn.Parent = frame
+    local layout = Instance.new("UIListLayout")
+    layout.Padding = UDim.new(0, 8)
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Parent = scroll
 
-    local flyCorner = Instance.new("UICorner")
-    flyCorner.CornerRadius = UDim.new(0, 8)
-    flyCorner.Parent = flyBtn
+    -- Button factory
+    local function makeToggle(text, callback)
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(1, -10, 0, 42)
+        btn.BackgroundColor3 = Color3.fromRGB(35, 35, 50)
+        btn.Text = text .. ": OFF"
+        btn.TextColor3 = Color3.fromRGB(200, 200, 200)
+        btn.TextSize = 15
+        btn.Font = Enum.Font.GothamSemibold
+        btn.BorderSizePixel = 0
+        btn.Parent = scroll
+        local c = Instance.new("UICorner") c.CornerRadius = UDim.new(0,8) c.Parent = btn
 
-    -- Fly speed slider label
-    local speedLabel = Instance.new("TextLabel")
-    speedLabel.Size = UDim2.new(0.9, 0, 0, 20)
-    speedLabel.Position = UDim2.new(0.05, 0, 0, 115)
-    speedLabel.BackgroundTransparency = 1
-    speedLabel.Text = "Fly Speed: " .. State.FlySpeed
-    speedLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
-    speedLabel.TextSize = 12
-    speedLabel.Font = Enum.Font.Gotham
-    speedLabel.TextXAlignment = Enum.TextXAlignment.Left
-    speedLabel.Parent = frame
-
-    -- Speed slider (using TextBox for mobile simplicity)
-    local speedBox = Instance.new("TextBox")
-    speedBox.Size = UDim2.new(0.9, 0, 0, 30)
-    speedBox.Position = UDim2.new(0.05, 0, 0, 140)
-    speedBox.BackgroundColor3 = Color3.fromRGB(35, 35, 48)
-    speedBox.Text = tostring(State.FlySpeed)
-    speedBox.TextColor3 = Color3.fromRGB(0, 200, 255)
-    speedBox.TextSize = 14
-    speedBox.Font = Enum.Font.Gotham
-    speedBox.BorderSizePixel = 0
-    speedBox.PlaceholderText = "Speed (10-500)"
-    speedBox.Parent = frame
-
-    local speedCorner = Instance.new("UICorner")
-    speedCorner.CornerRadius = UDim.new(0, 6)
-    speedCorner.Parent = speedBox
-
-    -- Section: Translucent
-    local transBtn = Instance.new("TextButton")
-    transBtn.Size = UDim2.new(0.9, 0, 0, 45)
-    transBtn.Position = UDim2.new(0.05, 0, 0, 185)
-    transBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
-    transBtn.Text = "👻 TRANSLUCENT: OFF"
-    transBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
-    transBtn.TextSize = 16
-    transBtn.Font = Enum.Font.GothamSemibold
-    transBtn.BorderSizePixel = 0
-    transBtn.Parent = frame
-
-    local transCorner = Instance.new("UICorner")
-    transCorner.CornerRadius = UDim.new(0, 8)
-    transCorner.Parent = transBtn
-
-    -- Transparency slider label
-    local alphaLabel = Instance.new("TextLabel")
-    alphaLabel.Size = UDim2.new(0.9, 0, 0, 20)
-    alphaLabel.Position = UDim2.new(0.05, 0, 0, 240)
-    alphaLabel.BackgroundTransparency = 1
-    alphaLabel.Text = "Alpha: " .. State.Transparency
-    alphaLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
-    alphaLabel.TextSize = 12
-    alphaLabel.Font = Enum.Font.Gotham
-    alphaLabel.TextXAlignment = Enum.TextXAlignment.Left
-    alphaLabel.Parent = frame
-
-    -- Alpha textbox
-    local alphaBox = Instance.new("TextBox")
-    alphaBox.Size = UDim2.new(0.9, 0, 0, 30)
-    alphaBox.Position = UDim2.new(0.05, 0, 0, 265)
-    alphaBox.BackgroundColor3 = Color3.fromRGB(35, 35, 48)
-    alphaBox.Text = tostring(State.Transparency)
-    alphaBox.TextColor3 = Color3.fromRGB(0, 200, 255)
-    alphaBox.TextSize = 14
-    alphaBox.Font = Enum.Font.Gotham
-    alphaBox.BorderSizePixel = 0
-    alphaBox.PlaceholderText = "0.0 - 1.0"
-    alphaBox.Parent = frame
-
-    local alphaCorner = Instance.new("UICorner")
-    alphaCorner.CornerRadius = UDim.new(0, 6)
-    alphaCorner.Parent = alphaBox
-
-    -- =====================================================================
-    -- UI EVENT HANDLERS
-    -- =====================================================================
-    toggleBtn.MouseButton1Click:Connect(function()
-        frame.Visible = not frame.Visible
-    end)
-
-    closeBtn.MouseButton1Click:Connect(function()
-        frame.Visible = false
-    end)
-
-    -- Fly toggle
-    flyBtn.MouseButton1Click:Connect(function()
-        State.Fly = not State.Fly
-        if State.Fly then
-            flyBtn.Text = "✈ FLY: ON"
-            flyBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 100)
-            flyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-            startFly()
-        else
-            flyBtn.Text = "✈ FLY: OFF"
-            flyBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
-            flyBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
-            stopFly()
-        end
-    end)
-
-    -- Speed input
-    speedBox.FocusLost:Connect(function()
-        local num = tonumber(speedBox.Text)
-        if num and num >= 10 and num <= 500 then
-            State.FlySpeed = num
-            speedLabel.Text = "Fly Speed: " .. num
-        else
-            speedBox.Text = tostring(State.FlySpeed)
-        end
-    end)
-
-    -- Translucent toggle
-    transBtn.MouseButton1Click:Connect(function()
-        State.Translucent = not State.Translucent
-        if State.Translucent then
-            transBtn.Text = "👻 TRANSLUCENT: ON"
-            transBtn.BackgroundColor3 = Color3.fromRGB(100, 50, 150)
-            transBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-            startTranslucent()
-        else
-            transBtn.Text = "👻 TRANSLUCENT: OFF"
-            transBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
-            transBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
-            stopTranslucent()
-        end
-    end)
-
-    -- Alpha input
-    alphaBox.FocusLost:Connect(function()
-        local num = tonumber(alphaBox.Text)
-        if num and num >= 0 and num <= 1 then
-            State.Transparency = num
-            alphaLabel.Text = "Alpha: " .. num
-            if State.Translucent then
-                applyTransparency(LocalPlayer.Character, num)
+        local enabled = false
+        btn.MouseButton1Click:Connect(function()
+            enabled = not enabled
+            if enabled then
+                btn.Text = text .. ": ON"
+                btn.BackgroundColor3 = Color3.fromRGB(0, 130, 90)
+                btn.TextColor3 = Color3.fromRGB(255,255,255)
+            else
+                btn.Text = text .. ": OFF"
+                btn.BackgroundColor3 = Color3.fromRGB(35, 35, 50)
+                btn.TextColor3 = Color3.fromRGB(200, 200, 200)
             end
+            callback(enabled)
+        end)
+        return btn
+    end
+
+    local function makeInput(labelText, placeholder, default, onConfirm)
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(1, -10, 0, 18)
+        lbl.BackgroundTransparency = 1
+        lbl.Text = labelText
+        lbl.TextColor3 = Color3.fromRGB(160, 160, 180)
+        lbl.TextSize = 12
+        lbl.Font = Enum.Font.Gotham
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.Parent = scroll
+
+        local box = Instance.new("TextBox")
+        box.Size = UDim2.new(1, -10, 0, 34)
+        box.BackgroundColor3 = Color3.fromRGB(30, 30, 44)
+        box.Text = tostring(default)
+        box.PlaceholderText = placeholder
+        box.TextColor3 = Color3.fromRGB(0, 220, 255)
+        box.TextSize = 14
+        box.Font = Enum.Font.Gotham
+        box.BorderSizePixel = 0
+        box.Parent = scroll
+        local c = Instance.new("UICorner") c.CornerRadius = UDim.new(0,6) c.Parent = box
+
+        box.FocusLost:Connect(function()
+            onConfirm(box.Text)
+        end)
+        return box
+    end
+
+    -- ============ FEATURES ============
+    makeToggle("✈ FLY", function(on)
+        State.Fly = on
+        if on then startFly() else stopFly() end
+    end)
+
+    makeToggle("👻 NOCLIP", function(on)
+        State.Noclip = on
+        if on then startNoclip() else stopNoclip() end
+    end)
+
+    makeToggle("🦘 INFINITE JUMP", function(on)
+        State.InfiniteJump = on
+        if on then startInfiniteJump() else stopInfiniteJump() end
+    end)
+
+    makeToggle("🛡 GODMODE (LOCAL)", function(on)
+        State.Godmode = on
+        if on then startGodmode() else stopGodmode() end
+    end)
+
+    makeToggle("☀ FULLBRIGHT", function(on)
+        State.Fullbright = on
+        if on then startFullbright() else stopFullbright() end
+    end)
+
+    makeToggle("👁 ESP (PLAYERS)", function(on)
+        State.ESP = on
+        if on then startESP() else stopESP() end
+    end)
+
+    makeToggle("❄ FREEZE SELF", function(on)
+        setFrozen(on)
+    end)
+
+    makeInput("WALK SPEED", "16", State.WalkSpeed, function(txt)
+        local n = tonumber(txt)
+        if n and n >= 0 and n <= 500 then applySpeed(n) end
+    end)
+
+    makeInput("JUMP POWER", "50", State.JumpPower, function(txt)
+        local n = tonumber(txt)
+        if n and n >= 0 and n <= 500 then applyJump(n) end
+    end)
+
+    makeInput("FLY SPEED", "60", State.FlySpeed, function(txt)
+        local n = tonumber(txt)
+        if n and n >= 10 and n <= 500 then State.FlySpeed = n end
+    end)
+
+    -- Teleport section
+    local tpLabel = Instance.new("TextLabel")
+    tpLabel.Size = UDim2.new(1, -10, 0, 20)
+    tpLabel.BackgroundTransparency = 1
+    tpLabel.Text = "TELEPORT (X, Y, Z)"
+    tpLabel.TextColor3 = Color3.fromRGB(0, 220, 255)
+    tpLabel.TextSize = 13
+    tpLabel.Font = Enum.Font.GothamBold
+    tpLabel.TextXAlignment = Enum.TextXAlignment.Left
+    tpLabel.Parent = scroll
+
+    local tpBox = Instance.new("TextBox")
+    tpBox.Size = UDim2.new(1, -10, 0, 34)
+    tpBox.BackgroundColor3 = Color3.fromRGB(30, 30, 44)
+    tpBox.Text = "0, 50, 0"
+    tpBox.PlaceholderText = "X, Y, Z"
+    tpBox.TextColor3 = Color3.fromRGB(0, 220, 255)
+    tpBox.TextSize = 14
+    tpBox.Font = Enum.Font.Gotham
+    tpBox.BorderSizePixel = 0
+    tpBox.Parent = scroll
+    local tpc = Instance.new("UICorner") tpc.CornerRadius = UDim.new(0,6) tpc.Parent = tpBox
+
+    local tpGo = Instance.new("TextButton")
+    tpGo.Size = UDim2.new(1, -10, 0, 36)
+    tpGo.BackgroundColor3 = Color3.fromRGB(0, 120, 180)
+    tpGo.Text = "TELEPORT"
+    tpGo.TextColor3 = Color3.fromRGB(255,255,255)
+    tpGo.TextSize = 14
+    tpGo.Font = Enum.Font.GothamBold
+    tpGo.BorderSizePixel = 0
+    tpGo.Parent = scroll
+    local tpcc = Instance.new("UICorner") tpcc.CornerRadius = UDim.new(0,6) tpcc.Parent = tpGo
+
+    tpGo.MouseButton1Click:Connect(function()
+        local parts = {}
+        for s in string.gmatch(tpBox.Text, "([^,]+)") do
+            table.insert(parts, tonumber(s))
+        end
+        if #parts == 3 and parts[1] and parts[2] and parts[3] then
+            teleportTo(parts[1], parts[2], parts[3])
+            notify("Iron Admin", "Teleported!", 2)
         else
-            alphaBox.Text = tostring(State.Transparency)
+            notify("Iron Admin", "Invalid coordinates", 2)
         end
     end)
 
-    return gui
+    -- Utility buttons
+    local resetBtn = Instance.new("TextButton")
+    resetBtn.Size = UDim2.new(1, -10, 0, 38)
+    resetBtn.BackgroundColor3 = Color3.fromRGB(150, 100, 0)
+    resetBtn.Text = "🔄 RESET CHARACTER"
+    resetBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    resetBtn.TextSize = 14
+    resetBtn.Font = Enum.Font.GothamBold
+    resetBtn.BorderSizePixel = 0
+    resetBtn.Parent = scroll
+    local rbc = Instance.new("UICorner") rbc.CornerRadius = UDim.new(0,6) rbc.Parent = resetBtn
+
+    resetBtn.MouseButton1Click:Connect(function()
+        local hum = getHumanoid()
+        if hum then hum.Health = 0 end
+    end)
+
+    local rejoinBtn = Instance.new("TextButton")
+    rejoinBtn.Size = UDim2.new(1, -10, 0, 38)
+    rejoinBtn.BackgroundColor3 = Color3.fromRGB(150, 30, 30)
+    rejoinBtn.Text = "🚪 REJOIN SERVER"
+    rejoinBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    rejoinBtn.TextSize = 14
+    rejoinBtn.Font = Enum.Font.GothamBold
+    rejoinBtn.BorderSizePixel = 0
+    rejoinBtn.Parent = scroll
+    local rjc = Instance.new("UICorner") rjc.CornerRadius = UDim.new(0,6) rjc.Parent = rejoinBtn
+
+    rejoinBtn.MouseButton1Click:Connect(function()
+        pcall(function()
+            TeleportService:Teleport(game.PlaceId, LocalPlayer)
+        end)
+    end)
+
+    -- Footer credit
+    local credit = Instance.new("TextLabel")
+    credit.Size = UDim2.new(1, -10, 0, 20)
+    credit.BackgroundTransparency = 1
+    credit.Text = "Iron Gate Hub v1.0 | Client-side"
+    credit.TextColor3 = Color3.fromRGB(100, 100, 120)
+    credit.TextSize = 11
+    credit.Font = Enum.Font.Gotham
+    credit.Parent = scroll
+
+    -- Toggle handlers
+    toggle.MouseButton1Click:Connect(function()
+        panel.Visible = not panel.Visible
+    end)
+    close.MouseButton1Click:Connect(function()
+        panel.Visible = false
+    end)
 end
 
 -- =====================================================================
--- CHARACTER RESPAWN HANDLING
+-- RESPAWN HANDLER
 -- =====================================================================
-LocalPlayer.CharacterAdded:Connect(function(char)
+LocalPlayer.CharacterAdded:Connect(function()
     task.wait(1)
-    if State.Translucent then
-        startTranslucent()
-    end
-    if State.Fly then
-        stopFly()
-        State.Fly = false
-        startFly()
+    if State.Fly then stopFly() startFly() end
+    if State.Noclip then stopNoclip() startNoclip() end
+    if State.Godmode then startGodmode() end
+    if State.WalkSpeed ~= 16 then applySpeed(State.WalkSpeed) end
+    if State.JumpPower ~= 50 then applyJump(State.JumpPower) end
+    if State.ESP then
+        for _, p in ipairs(Players:GetPlayers()) do createESP(p) end
     end
 end)
 
 -- =====================================================================
 -- INIT
 -- =====================================================================
-local ok, err = pcall(function()
-    createUI()
-end)
-
+local ok, err = pcall(createUI)
 if not ok then
-    warn("[IronGate] UI creation failed: " .. tostring(err))
+    warn("[IronAdmin] UI failed: " .. tostring(err))
 else
-    pcall(function()
-        StarterGui:SetCore("SendNotification", {
-            Title = "Iron Gate Hub",
-            Text = "Loaded successfully. Tap 'IG' to open.",
-            Duration = 5,
-        })
-    end)
+    notify("Iron Admin Panel", "Loaded! Tap 'ADMIN' to open.", 5)
 end
 
-print("[IronGate] Hub loaded. Fly + Translucent ready.")
+print("[IronAdmin] Panel loaded successfully.")
