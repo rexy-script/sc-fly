@@ -602,4 +602,145 @@ local function createUI()
             do local c = Instance.new("UICorner") c.CornerRadius = UDim.new(0, 6) c.Parent = pb end
             pb.MouseButton1Click:Connect(function()
                 applyJumpPower(jp)
-        
+                notify("Iron Admin", "JumpPower → " .. jp, 2)
+            end)
+        end
+    end
+
+    section("COMBAT / VISUAL")
+
+    toggleBtn("🛡 GODMODE (LOCAL)", function(on)
+        State.Godmode = on
+        if on then startGodmode() else stopGodmode() end
+    end)
+
+    toggleBtn("☀ FULLBRIGHT", function(on)
+        State.Fullbright = on
+        if on then startFullbright() else stopFullbright() end
+    end)
+
+    toggleBtn("👁 ESP (PLAYERS)", function(on)
+        State.ESP = on
+        if on then startESP() else stopESP() end
+    end)
+
+    toggleBtn("❄ FREEZE SELF", function(on)
+        setFrozen(on)
+    end)
+
+    section("TELEPORT")
+
+    local tpBox = Instance.new("TextBox")
+    tpBox.Size = UDim2.new(1, -10, 0, 34)
+    tpBox.BackgroundColor3 = Color3.fromRGB(30, 30, 44)
+    tpBox.Text = "0, 50, 0"
+    tpBox.PlaceholderText = "X, Y, Z"
+    tpBox.TextColor3 = Color3.fromRGB(0, 220, 255)
+    tpBox.TextSize = 14
+    tpBox.Font = Enum.Font.Gotham
+    tpBox.BorderSizePixel = 0
+    tpBox.ClearTextOnFocus = false
+    tpBox.Parent = scroll
+    do local c = Instance.new("UICorner") c.CornerRadius = UDim.new(0, 6) c.Parent = tpBox end
+
+    local tpGo = Instance.new("TextButton")
+    tpGo.Size = UDim2.new(1, -10, 0, 36)
+    tpGo.BackgroundColor3 = Color3.fromRGB(0, 120, 180)
+    tpGo.Text = "TELEPORT"
+    tpGo.TextColor3 = Color3.fromRGB(255, 255, 255)
+    tpGo.TextSize = 14
+    tpGo.Font = Enum.Font.GothamBold
+    tpGo.BorderSizePixel = 0
+    tpGo.Parent = scroll
+    do local c = Instance.new("UICorner") c.CornerRadius = UDim.new(0, 6) c.Parent = tpGo end
+
+    tpGo.MouseButton1Click:Connect(function()
+        local nums = {}
+        for s in string.gmatch(tpBox.Text, "([^,]+)") do
+            table.insert(nums, tonumber(s))
+        end
+        if #nums == 3 and nums[1] and nums[2] and nums[3] then
+            teleportTo(nums[1], nums[2], nums[3])
+            notify("Iron Admin", "Teleported", 2)
+        else
+            notify("Iron Admin", "Invalid coords", 2)
+        end
+    end)
+
+    section("UTILITIES")
+
+    local resetBtn = Instance.new("TextButton")
+    resetBtn.Size = UDim2.new(1, -10, 0, 38)
+    resetBtn.BackgroundColor3 = Color3.fromRGB(150, 100, 0)
+    resetBtn.Text = "🔄 RESET CHARACTER"
+    resetBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    resetBtn.TextSize = 14
+    resetBtn.Font = Enum.Font.GothamBold
+    resetBtn.BorderSizePixel = 0
+    resetBtn.Parent = scroll
+    do local c = Instance.new("UICorner") c.CornerRadius = UDim.new(0, 6) c.Parent = resetBtn end
+    resetBtn.MouseButton1Click:Connect(function()
+        local hum = getHumanoid()
+        if hum then hum.Health = 0 end
+    end)
+
+    local rejoinBtn = Instance.new("TextButton")
+    rejoinBtn.Size = UDim2.new(1, -10, 0, 38)
+    rejoinBtn.BackgroundColor3 = Color3.fromRGB(150, 30, 30)
+    rejoinBtn.Text = "🚪 REJOIN SERVER"
+    rejoinBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    rejoinBtn.TextSize = 14
+    rejoinBtn.Font = Enum.Font.GothamBold
+    rejoinBtn.BorderSizePixel = 0
+    rejoinBtn.Parent = scroll
+    do local c = Instance.new("UICorner") c.CornerRadius = UDim.new(0, 6) c.Parent = rejoinBtn end
+    rejoinBtn.MouseButton1Click:Connect(function()
+        pcall(function()
+            TeleportService:Teleport(game.PlaceId, LocalPlayer)
+        end)
+    end)
+
+    local credit = Instance.new("TextLabel")
+    credit.Size = UDim2.new(1, -10, 0, 20)
+    credit.BackgroundTransparency = 1
+    credit.Text = "Iron Gate Hub v2 | client-side"
+    credit.TextColor3 = Color3.fromRGB(110, 110, 130)
+    credit.TextSize = 11
+    credit.Font = Enum.Font.Gotham
+    credit.Parent = scroll
+
+    -- Toggle / close
+    toggle.MouseButton1Click:Connect(function()
+        panel.Visible = not panel.Visible
+    end)
+    close.MouseButton1Click:Connect(function()
+        panel.Visible = false
+    end)
+end
+
+-- =====================================================================
+-- CHARACTER RESPAWN HANDLER
+-- =====================================================================
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1)
+    if State.Fly then stopFly() startFly() end
+    if State.Noclip then stopNoclip() startNoclip() end
+    if State.Godmode then startGodmode() end
+    if State.WalkSpeed ~= 16 then applyWalkSpeed(State.WalkSpeed) end
+    if State.JumpPower ~= 50 then applyJumpPower(State.JumpPower) end
+    if State.ESP then
+        for _, p in ipairs(Players:GetPlayers()) do createESP(p) end
+    end
+end)
+
+-- =====================================================================
+-- INIT
+-- =====================================================================
+local ok, err = pcall(createUI)
+if not ok then
+    warn("[IronAdmin] UI failed: " .. tostring(err))
+else
+    notify("Iron Admin Panel v2", "Loaded! Tap ADMIN to open.", 5)
+end
+
+print("[IronAdmin v2] Loaded. Fly, WalkSpeed, JumpPower ready.")
