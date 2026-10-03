@@ -1,35 +1,24 @@
 --[[
     IRON ADMIN PANEL v2.0
-    Target : Roblox (Client-side)
+    Target: Roblox (Client-side)
     Executor: Delta (mobile-compatible)
-    Features:
-        - Fly (with adjustable Fly Speed)
-        - Noclip
-        - Infinite Jump
-        - Walk Speed (numeric input + presets)
-        - Jump Power (numeric input + presets)
-        - Godmode (local, visual)
-        - Fullbright
-        - ESP (player highlight)
-        - Freeze Self
-        - Teleport (X, Y, Z)
-        - Reset Character
-        - Rejoin Server
-    Author : Axiom / Kyler
-    Sim ID : IRON-GATE-RBX-ADMIN-006
+    New: Live XYZ coords, sliders for speed/jump/fly, state readout
+    Simulation: IRON-GATE-RBX-ADMIN-006
 ]]
 
 -- =====================================================================
 -- SERVICES
 -- =====================================================================
-local Players           = game:GetService("Players")
-local RunService        = game:GetService("RunService")
-local UserInputService  = game:GetService("UserInputService")
-local Lighting          = game:GetService("Lighting")
-local StarterGui        = game:GetService("StarterGui")
-local TeleportService   = game:GetService("TeleportService")
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Lighting         = game:GetService("Lighting")
+local StarterGui       = game:GetService("StarterGui")
+local TeleportService  = game:GetService("TeleportService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local LocalPlayer = Players.LocalPlayer
+local Camera      = workspace.CurrentCamera
 
 -- =====================================================================
 -- STATE
@@ -42,31 +31,19 @@ local State = {
     Fullbright   = false,
     ESP          = false,
     Frozen       = false,
-
-    FlySpeed     = 60,
     WalkSpeed    = 16,
     JumpPower    = 50,
+    FlySpeed     = 60,
 }
 
 local Connections = {
-    Fly          = nil,
-    Noclip       = nil,
-    InfiniteJump = nil,
-    ESP          = nil,
+    Fly = nil, Noclip = nil, InfiniteJump = nil, ESP = nil,
+    CoordUpdate = nil,
 }
 
 local FlyBV, FlyBG = nil, nil
-local ESPObjects   = {}
-local GodmodeThread = nil
-
--- Original lighting snapshot
-local OriginalLighting = {
-    Ambient        = Lighting.Ambient,
-    OutdoorAmbient = Lighting.OutdoorAmbient,
-    Brightness     = Lighting.Brightness,
-    ClockTime      = Lighting.ClockTime,
-    FogEnd         = Lighting.FogEnd,
-}
+local ESPObjects = {}
+local UI = {}   -- store UI references for updating
 
 -- =====================================================================
 -- UTILITY
@@ -81,44 +58,34 @@ local function getUIParent()
     return LocalPlayer:WaitForChild("PlayerGui")
 end
 
-local function getChar()
-    return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-end
-local function getHRP()
-    local c = LocalPlayer.Character
-    return c and c:FindFirstChild("HumanoidRootPart")
-end
-local function getHumanoid()
-    local c = LocalPlayer.Character
-    return c and c:FindFirstChildOfClass("Humanoid")
-end
+local function getChar() return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait() end
+local function getHRP() local c = getChar() return c and c:FindFirstChild("HumanoidRootPart") end
+local function getHum() local c = getChar() return c and c:FindFirstChildOfClass("Humanoid") end
 
-local function notify(title, text, duration)
+local function notify(title, text, dur)
     pcall(function()
         StarterGui:SetCore("SendNotification", {
-            Title = title, Text = text, Duration = duration or 3,
+            Title = title, Text = text, Duration = dur or 3,
         })
     end)
 end
 
 -- =====================================================================
--- FLY
+-- FEATURE: FLY
 -- =====================================================================
 local function startFly()
-    local hrp, hum = getHRP(), getHumanoid()
+    local hrp, hum = getHRP(), getHum()
     if not hrp or not hum then return end
-
     for _, o in ipairs(hrp:GetChildren()) do
         if o:IsA("BodyVelocity") or o:IsA("BodyGyro") then o:Destroy() end
     end
-
     FlyBV = Instance.new("BodyVelocity")
-    FlyBV.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+    FlyBV.MaxForce = Vector3.new(1e5,1e5,1e5)
     FlyBV.Velocity = Vector3.zero
-    FlyBV.Parent   = hrp
+    FlyBV.Parent = hrp
 
     FlyBG = Instance.new("BodyGyro")
-    FlyBG.MaxTorque = Vector3.new(1e5, 1e5, 1e5)
+    FlyBG.MaxTorque = Vector3.new(1e5,1e5,1e5)
     FlyBG.P = 1e4
     FlyBG.Parent = hrp
 
@@ -129,19 +96,16 @@ local function startFly()
         if not State.Fly then return end
         local cam = workspace.CurrentCamera
         local dir = Vector3.zero
-
-        if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir += cam.CFrame.LookVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir -= cam.CFrame.LookVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.A) then dir -= cam.CFrame.RightVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.D) then dir += cam.CFrame.RightVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.Space)        then dir += Vector3.new(0, 1, 0) end
-        if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl)  then dir -= Vector3.new(0, 1, 0) end
-
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir = dir + cam.CFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir = dir - cam.CFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then dir = dir - cam.CFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then dir = dir + cam.CFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then dir = dir + Vector3.new(0,1,0) end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then dir = dir - Vector3.new(0,1,0) end
         local mv = hum.MoveDirection
-        if mv.Magnitude > 0 then dir += mv end
-
-        FlyBV.Velocity = (dir.Magnitude > 0) and (dir.Unit * State.FlySpeed) or Vector3.zero
-        FlyBG.CFrame   = cam.CFrame
+        if mv.Magnitude > 0 then dir = dir + mv end
+        FlyBV.Velocity = dir.Magnitude > 0 and (dir.Unit * State.FlySpeed) or Vector3.zero
+        FlyBG.CFrame = cam.CFrame
     end)
 end
 
@@ -149,45 +113,42 @@ local function stopFly()
     if Connections.Fly then Connections.Fly:Disconnect() Connections.Fly = nil end
     if FlyBV then FlyBV:Destroy() FlyBV = nil end
     if FlyBG then FlyBG:Destroy() FlyBG = nil end
-    local hum = getHumanoid()
-    if hum then
-        hum.PlatformStand = false
-        hum:ChangeState(Enum.HumanoidStateType.GettingUp)
-    end
+    local hum = getHum()
+    if hum then hum.PlatformStand = false; hum:ChangeState(Enum.HumanoidStateType.GettingUp) end
 end
 
 -- =====================================================================
--- NOCLIP
+-- FEATURE: NOCLIP
 -- =====================================================================
 local function startNoclip()
     Connections.Noclip = RunService.Stepped:Connect(function()
         if not State.Noclip then return end
-        local c = LocalPlayer.Character
-        if not c then return end
-        for _, p in ipairs(c:GetDescendants()) do
-            if p:IsA("BasePart") then p.CanCollide = false end
+        local char = LocalPlayer.Character
+        if not char then return end
+        for _, p in ipairs(char:GetDescendants()) do
+            if p:IsA("BasePart") and p.CanCollide then p.CanCollide = false end
         end
     end)
 end
 
 local function stopNoclip()
     if Connections.Noclip then Connections.Noclip:Disconnect() Connections.Noclip = nil end
-    local c = LocalPlayer.Character
-    if c then
-        for _, p in ipairs(c:GetDescendants()) do
+    local char = LocalPlayer.Character
+    if char then
+        for _, p in ipairs(char:GetDescendants()) do
             if p:IsA("BasePart") then p.CanCollide = true end
         end
     end
 end
 
 -- =====================================================================
--- INFINITE JUMP
+-- FEATURE: INFINITE JUMP
 -- =====================================================================
 local function startInfiniteJump()
     Connections.InfiniteJump = UserInputService.JumpRequest:Connect(function()
         if not State.InfiniteJump then return end
-        local hum = getHumanoid()
-        if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+        local h = getHum()
+        if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end
     end)
 end
 
@@ -199,112 +160,107 @@ local function stopInfiniteJump()
 end
 
 -- =====================================================================
--- GODMODE (LOCAL)
+-- FEATURE: GODMODE (LOCAL)
 -- =====================================================================
 local function startGodmode()
     local function apply()
-        local hum = getHumanoid()
-        if hum then
-            hum.MaxHealth = math.huge
-            hum.Health = math.huge
-            hum.NameDisplayDistance = 0
-        end
+        local h = getHum()
+        if h then h.MaxHealth = math.huge; h.Health = math.huge end
     end
     apply()
-    GodmodeThread = task.spawn(function()
-        while State.Godmode do
-            apply()
-            task.wait(0.5)
-        end
+    State._GodmodeLoop = task.spawn(function()
+        while State.Godmode do apply(); task.wait(0.5) end
     end)
 end
 
 local function stopGodmode()
-    State.Godmode = false
-    if GodmodeThread then task.cancel(GodmodeThread) GodmodeThread = nil end
-    local hum = getHumanoid()
-    if hum then
-        hum.MaxHealth = 100
-        hum.Health = 100
-        hum.NameDisplayDistance = 100
-    end
+    State._GodmodeLoop = nil
+    local h = getHum()
+    if h then h.MaxHealth = 100; h.Health = 100 end
 end
 
 -- =====================================================================
--- FULLBRIGHT
+-- FEATURE: FULLBRIGHT
 -- =====================================================================
+local OrigLight = {
+    Ambient = Lighting.Ambient, OutdoorAmbient = Lighting.OutdoorAmbient,
+    Brightness = Lighting.Brightness, ClockTime = Lighting.ClockTime,
+    FogEnd = Lighting.FogEnd,
+}
+
 local function startFullbright()
-    Lighting.Ambient = Color3.fromRGB(255, 255, 255)
-    Lighting.OutdoorAmbient = Color3.fromRGB(255, 255, 255)
+    Lighting.Ambient = Color3.fromRGB(255,255,255)
+    Lighting.OutdoorAmbient = Color3.fromRGB(255,255,255)
     Lighting.Brightness = 3
     Lighting.ClockTime = 12
-    Lighting.FogEnd = 1e5
+    Lighting.FogEnd = 100000
 end
 
 local function stopFullbright()
-    Lighting.Ambient = OriginalLighting.Ambient
-    Lighting.OutdoorAmbient = OriginalLighting.OutdoorAmbient
-    Lighting.Brightness = OriginalLighting.Brightness
-    Lighting.ClockTime = OriginalLighting.ClockTime
-    Lighting.FogEnd = OriginalLighting.FogEnd
+    Lighting.Ambient = OrigLight.Ambient
+    Lighting.OutdoorAmbient = OrigLight.OutdoorAmbient
+    Lighting.Brightness = OrigLight.Brightness
+    Lighting.ClockTime = OrigLight.ClockTime
+    Lighting.FogEnd = OrigLight.FogEnd
 end
 
 -- =====================================================================
--- ESP
+-- FEATURE: ESP
 -- =====================================================================
-local function createESP(player)
-    if player == LocalPlayer then return end
-    local char = player.Character
+local function createESP(plr)
+    if plr == LocalPlayer then return end
+    local char = plr.Character
     if not char then return end
-    if ESPObjects[player] then ESPObjects[player]:Destroy() end
-
+    if ESPObjects[plr] then ESPObjects[plr]:Destroy() end
     local hl = Instance.new("Highlight")
     hl.Name = "IronESP"
-    hl.FillColor = Color3.fromRGB(255, 0, 0)
-    hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+    hl.FillColor = Color3.fromRGB(255,0,0)
+    hl.OutlineColor = Color3.fromRGB(255,255,255)
     hl.FillTransparency = 0.5
-    hl.OutlineTransparency = 0
     hl.Adornee = char
     hl.Parent = char
-    ESPObjects[player] = hl
+    ESPObjects[plr] = hl
+end
+
+local function removeESP(plr)
+    if ESPObjects[plr] then ESPObjects[plr]:Destroy() ESPObjects[plr] = nil end
+end
+
+local function startESP()
+    for _, p in ipairs(Players:GetPlayers()) do createESP(p) end
+    Connections.ESP = Players.PlayerAdded:Connect(function(p)
+        if State.ESP then createESP(p) end
+    end)
 end
 
 local function stopESP()
-    for _, hl in pairs(ESPObjects) do
-        if hl then hl:Destroy() end
-    end
+    for p, h in pairs(ESPObjects) do if h then h:Destroy() end end
     ESPObjects = {}
     if Connections.ESP then Connections.ESP:Disconnect() Connections.ESP = nil end
 end
 
-local function startESP()
-    for _, p in ipairs(Players:GetPlayers()) do
-        createESP(p)
-        p.CharacterAdded:Connect(function()
-            if State.ESP then
-                task.wait(0.5)
-                createESP(p)
-            end
-        end)
-    end
-    Connections.ESP = Players.PlayerAdded:Connect(function(p)
-        if State.ESP then
-            p.CharacterAdded:Connect(function()
-                task.wait(0.5)
-                if State.ESP then createESP(p) end
-            end)
-            createESP(p)
-        end
-    end)
+-- =====================================================================
+-- FEATURE: FREEZE
+-- =====================================================================
+local function setFrozen(freeze)
+    local hrp = getHRP()
+    if hrp then hrp.Anchored = freeze end
+    State.Frozen = freeze
 end
 
 -- =====================================================================
--- FREEZE / TELEPORT / SPEED / JUMP
+-- FEATURE: SPEED / JUMP / TELEPORT
 -- =====================================================================
-local function setFrozen(v)
-    local hrp = getHRP()
-    if hrp then hrp.Anchored = v end
-    State.Frozen = v
+local function applySpeed(v)
+    local h = getHum()
+    if h then h.WalkSpeed = v end
+    State.WalkSpeed = v
+end
+
+local function applyJump(v)
+    local h = getHum()
+    if h then h.UseJumpPower = true; h.JumpPower = v end
+    State.JumpPower = v
 end
 
 local function teleportTo(x, y, z)
@@ -312,92 +268,90 @@ local function teleportTo(x, y, z)
     if hrp then hrp.CFrame = CFrame.new(x, y, z) end
 end
 
-local function applyWalkSpeed(v)
-    local hum = getHumanoid()
-    if hum then hum.WalkSpeed = v end
-    State.WalkSpeed = v
-end
-
-local function applyJumpPower(v)
-    local hum = getHumanoid()
-    if hum then
-        hum.UseJumpPower = true
-        hum.JumpPower = v
-    end
-    State.JumpPower = v
-end
-
 -- =====================================================================
--- UI
+-- UI BUILDER
 -- =====================================================================
 local function createUI()
     local parent = getUIParent()
-    if parent:FindFirstChild("IronAdminPanel") then
-        parent.IronAdminPanel:Destroy()
-    end
+    if parent:FindFirstChild("IronAdminPanelV2") then parent.IronAdminPanelV2:Destroy() end
 
     local gui = Instance.new("ScreenGui")
-    gui.Name = "IronAdminPanel"
+    gui.Name = "IronAdminPanelV2"
     gui.ResetOnSpawn = false
     gui.IgnoreGuiInset = true
     gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     gui.Parent = parent
 
-    -- Floating toggle button
+    -- Toggle button
     local toggle = Instance.new("TextButton")
-    toggle.Size = UDim2.new(0, 62, 0, 62)
+    toggle.Size = UDim2.new(0, 60, 0, 60)
     toggle.Position = UDim2.new(0, 15, 0.4, 0)
-    toggle.BackgroundColor3 = Color3.fromRGB(22, 22, 32)
+    toggle.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
     toggle.Text = "ADMIN"
     toggle.TextColor3 = Color3.fromRGB(0, 220, 255)
     toggle.TextScaled = true
     toggle.Font = Enum.Font.GothamBold
     toggle.BorderSizePixel = 0
     toggle.Parent = gui
-    do local c = Instance.new("UICorner") c.CornerRadius = UDim.new(0, 14) c.Parent = toggle end
+    Instance.new("UICorner", toggle).CornerRadius = UDim.new(0, 12)
 
     -- Main panel
     local panel = Instance.new("Frame")
-    panel.Size = UDim2.new(0, 320, 0, 460)
-    panel.Position = UDim2.new(0.5, -160, 0.5, -230)
-    panel.BackgroundColor3 = Color3.fromRGB(16, 16, 24)
+    panel.Size = UDim2.new(0, 320, 0, 480)
+    panel.Position = UDim2.new(0.5, -160, 0.5, -240)
+    panel.BackgroundColor3 = Color3.fromRGB(18, 18, 26)
     panel.BorderSizePixel = 0
     panel.Visible = false
     panel.Active = true
     panel.Draggable = true
     panel.Parent = gui
-    do
-        local c = Instance.new("UICorner") c.CornerRadius = UDim.new(0, 14) c.Parent = panel
-        local s = Instance.new("UIStroke") s.Color = Color3.fromRGB(0, 220, 255) s.Thickness = 1.5 s.Transparency = 0.4 s.Parent = panel
-    end
+    Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 12)
+    local ps = Instance.new("UIStroke", panel)
+    ps.Color = Color3.fromRGB(0,220,255); ps.Thickness = 1.5; ps.Transparency = 0.4
 
-    -- Header
+    -- Header (title + coord readout)
     local header = Instance.new("TextLabel")
-    header.Size = UDim2.new(1, 0, 0, 44)
+    header.Size = UDim2.new(1, 0, 0, 30)
+    header.Position = UDim2.new(0, 0, 0, 5)
     header.BackgroundTransparency = 1
-    header.Text = "⚡ IRON ADMIN PANEL v2"
+    header.Text = "⚡ IRON ADMIN v2"
     header.TextColor3 = Color3.fromRGB(0, 220, 255)
-    header.TextSize = 18
+    header.TextSize = 17
     header.Font = Enum.Font.GothamBold
     header.Parent = panel
 
-    -- Close
+    -- Coordinate label (live-updating)
+    local coordLabel = Instance.new("TextLabel")
+    coordLabel.Name = "CoordLabel"
+    coordLabel.Size = UDim2.new(1, -10, 0, 24)
+    coordLabel.Position = UDim2.new(0, 5, 0, 32)
+    coordLabel.BackgroundColor3 = Color3.fromRGB(10, 10, 18)
+    coordLabel.Text = "X: --  Y: --  Z: --"
+    coordLabel.TextColor3 = Color3.fromRGB(80, 255, 150)
+    coordLabel.TextSize = 13
+    coordLabel.Font = Enum.Font.Code
+    coordLabel.BorderSizePixel = 0
+    coordLabel.Parent = panel
+    Instance.new("UICorner", coordLabel).CornerRadius = UDim.new(0, 6)
+    UI.CoordLabel = coordLabel
+
+    -- Close button
     local close = Instance.new("TextButton")
-    close.Size = UDim2.new(0, 30, 0, 30)
-    close.Position = UDim2.new(1, -38, 0, 7)
+    close.Size = UDim2.new(0, 28, 0, 28)
+    close.Position = UDim2.new(1, -34, 0, 5)
     close.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
     close.Text = "X"
-    close.TextColor3 = Color3.fromRGB(255, 255, 255)
-    close.TextSize = 14
+    close.TextColor3 = Color3.fromRGB(255,255,255)
+    close.TextSize = 13
     close.Font = Enum.Font.GothamBold
     close.BorderSizePixel = 0
     close.Parent = panel
-    do local c = Instance.new("UICorner") c.CornerRadius = UDim.new(0, 8) c.Parent = close end
+    Instance.new("UICorner", close).CornerRadius = UDim.new(0, 7)
 
-    -- Scrolling area
+    -- Scrolling container
     local scroll = Instance.new("ScrollingFrame")
-    scroll.Size = UDim2.new(1, -20, 1, -58)
-    scroll.Position = UDim2.new(0, 10, 0, 52)
+    scroll.Size = UDim2.new(1, -16, 1, -70)
+    scroll.Position = UDim2.new(0, 8, 0, 62)
     scroll.BackgroundTransparency = 1
     scroll.BorderSizePixel = 0
     scroll.ScrollBarThickness = 4
@@ -406,328 +360,292 @@ local function createUI()
     scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
     scroll.Parent = panel
 
-    local layout = Instance.new("UIListLayout")
-    layout.Padding = UDim.new(0, 8)
+    local layout = Instance.new("UIListLayout", scroll)
+    layout.Padding = UDim.new(0, 6)
     layout.SortOrder = Enum.SortOrder.LayoutOrder
-    layout.Parent = scroll
 
-    -- Section header helper
-    local function section(text)
+    -- ========== UI HELPERS ==========
+    local function makeSection(text)
         local lbl = Instance.new("TextLabel")
-        lbl.Size = UDim2.new(1, -10, 0, 22)
+        lbl.Size = UDim2.new(1, -8, 0, 22)
         lbl.BackgroundTransparency = 1
         lbl.Text = text
         lbl.TextColor3 = Color3.fromRGB(0, 220, 255)
-        lbl.TextSize = 13
+        lbl.TextSize = 12
         lbl.Font = Enum.Font.GothamBold
         lbl.TextXAlignment = Enum.TextXAlignment.Left
         lbl.Parent = scroll
+        return lbl
     end
 
-    -- Toggle factory
-    local function toggleBtn(text, callback)
-        local b = Instance.new("TextButton")
-        b.Size = UDim2.new(1, -10, 0, 42)
-        b.BackgroundColor3 = Color3.fromRGB(35, 35, 50)
-        b.Text = text .. ": OFF"
-        b.TextColor3 = Color3.fromRGB(200, 200, 200)
-        b.TextSize = 15
-        b.Font = Enum.Font.GothamSemibold
-        b.BorderSizePixel = 0
-        b.Parent = scroll
-        do local c = Instance.new("UICorner") c.CornerRadius = UDim.new(0, 8) c.Parent = b end
-
+    local function makeToggle(text, cb)
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(1, -8, 0, 38)
+        btn.BackgroundColor3 = Color3.fromRGB(35, 35, 50)
+        btn.Text = text .. ": OFF"
+        btn.TextColor3 = Color3.fromRGB(200, 200, 200)
+        btn.TextSize = 14
+        btn.Font = Enum.Font.GothamSemibold
+        btn.BorderSizePixel = 0
+        btn.Parent = scroll
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 7)
         local on = false
-        b.MouseButton1Click:Connect(function()
+        btn.MouseButton1Click:Connect(function()
             on = not on
-            if on then
-                b.Text = text .. ": ON"
-                b.BackgroundColor3 = Color3.fromRGB(0, 130, 90)
-                b.TextColor3 = Color3.fromRGB(255, 255, 255)
-            else
-                b.Text = text .. ": OFF"
-                b.BackgroundColor3 = Color3.fromRGB(35, 35, 50)
-                b.TextColor3 = Color3.fromRGB(200, 200, 200)
-            end
-            callback(on)
+            btn.Text = text .. (on and ": ON" or ": OFF")
+            btn.BackgroundColor3 = on and Color3.fromRGB(0,130,90) or Color3.fromRGB(35,35,50)
+            btn.TextColor3 = on and Color3.fromRGB(255,255,255) or Color3.fromRGB(200,200,200)
+            cb(on)
         end)
-        return b
+        return btn
     end
 
-    -- Numeric input with Apply button
-    local function numRow(labelText, default, onApply)
-        local row = Instance.new("Frame")
-        row.Size = UDim2.new(1, -10, 0, 36)
-        row.BackgroundTransparency = 1
-        row.Parent = scroll
-        do
-            local l = Instance.new("UIListLayout")
-            l.FillDirection = Enum.FillDirection.Horizontal
-            l.Padding = UDim.new(0, 6)
-            l.VerticalAlignment = Enum.VerticalAlignment.Center
-            l.Parent = row
-        end
-
+    -- SLIDER (draggable) — mobile-friendly
+    local function makeSlider(label, minVal, maxVal, default, format, cb)
+        -- label
         local lbl = Instance.new("TextLabel")
-        lbl.Size = UDim2.new(0, 110, 1, 0)
+        lbl.Size = UDim2.new(1, -8, 0, 18)
         lbl.BackgroundTransparency = 1
-        lbl.Text = labelText
-        lbl.TextColor3 = Color3.fromRGB(180, 180, 200)
-        lbl.TextSize = 13
+        lbl.Text = label .. ": " .. format(default)
+        lbl.TextColor3 = Color3.fromRGB(160, 160, 180)
+        lbl.TextSize = 12
         lbl.Font = Enum.Font.Gotham
         lbl.TextXAlignment = Enum.TextXAlignment.Left
-        lbl.Parent = row
+        lbl.Parent = scroll
 
-        local box = Instance.new("TextBox")
-        box.Size = UDim2.new(0, 100, 1, 0)
-        box.BackgroundColor3 = Color3.fromRGB(30, 30, 44)
-        box.Text = tostring(default)
-        box.TextColor3 = Color3.fromRGB(0, 220, 255)
-        box.TextSize = 14
-        box.Font = Enum.Font.Gotham
-        box.BorderSizePixel = 0
-        box.ClearTextOnFocus = false
-        box.Parent = row
-        do local c = Instance.new("UICorner") c.CornerRadius = UDim.new(0, 6) c.Parent = box end
+        -- track
+        local track = Instance.new("Frame")
+        track.Size = UDim2.new(1, -8, 0, 10)
+        track.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
+        track.BorderSizePixel = 0
+        track.Parent = scroll
+        Instance.new("UICorner", track).CornerRadius = UDim.new(1, 0)
 
-        local btn = Instance.new("TextButton")
-        btn.Size = UDim2.new(0, 70, 1, 0)
-        btn.BackgroundColor3 = Color3.fromRGB(0, 120, 180)
-        btn.Text = "Apply"
-        btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-        btn.TextSize = 13
-        btn.Font = Enum.Font.GothamBold
-        btn.BorderSizePixel = 0
-        btn.Parent = row
-        do local c = Instance.new("UICorner") c.CornerRadius = UDim.new(0, 6) c.Parent = btn end
+        -- fill
+        local fill = Instance.new("Frame")
+        fill.Size = UDim2.new((default - minVal) / (maxVal - minVal), 0, 1, 0)
+        fill.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
+        fill.BorderSizePixel = 0
+        fill.Parent = track
+        Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
 
-        local function commit()
-            local n = tonumber(box.Text)
-            if n then
-                onApply(n)
-                notify("Iron Admin", labelText .. " set to " .. n, 2)
-            else
-                box.Text = tostring(default)
-            end
+        -- knob
+        local knob = Instance.new("Frame")
+        knob.Size = UDim2.new(0, 20, 0, 20)
+        knob.Position = UDim2.new((default - minVal) / (maxVal - minVal), -10, 0.5, -10)
+        knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        knob.BorderSizePixel = 0
+        knob.ZIndex = 2
+        knob.Parent = track
+        Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
+
+        local dragging = false
+        local function updateFromX(x)
+            local rel = math.clamp((x - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
+            local val = math.floor(minVal + rel * (maxVal - minVal) + 0.5)
+            fill.Size = UDim2.new(rel, 0, 1, 0)
+            knob.Position = UDim2.new(rel, -10, 0.5, -10)
+            lbl.Text = label .. ": " .. format(val)
+            cb(val)
         end
 
-        btn.MouseButton1Click:Connect(commit)
-        box.FocusLost:Connect(commit)
-        return box
+        track.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1
+               or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                updateFromX(input.Position.X)
+            end
+        end)
+        track.InputChanged:Connect(function(input)
+            if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+               or input.UserInputType == Enum.UserInputType.Touch) then
+                updateFromX(input.Position.X)
+            end
+        end)
+        track.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1
+               or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = false
+            end
+        end)
+        return {track = track, fill = fill, knob = knob, label = lbl, setVal = updateFromX}
     end
 
-    -- ============= FEATURE LIST =============
+    -- ========== CONTENT ==========
+    makeSection("— MOVEMENT —")
 
-    section("MOVEMENT")
-
-    toggleBtn("✈ FLY", function(on)
+    makeToggle("✈ FLY", function(on)
         State.Fly = on
         if on then startFly() else stopFly() end
     end)
 
-    numRow("Fly Speed", State.FlySpeed, function(n)
-        if n >= 10 and n <= 500 then State.FlySpeed = n end
-    end)
-
-    toggleBtn("👻 NOCLIP", function(on)
+    makeToggle("👻 NOCLIP", function(on)
         State.Noclip = on
         if on then startNoclip() else stopNoclip() end
     end)
 
-    toggleBtn("🦘 INFINITE JUMP", function(on)
+    makeToggle("🦘 INFINITE JUMP", function(on)
         State.InfiniteJump = on
         if on then startInfiniteJump() else stopInfiniteJump() end
     end)
 
-    section("SPEED & JUMP")
+    makeToggle("❄ FREEZE SELF", function(on) setFrozen(on) end)
 
-    numRow("Walk Speed", State.WalkSpeed, function(n)
-        if n >= 0 and n <= 500 then applyWalkSpeed(n) end
+    makeSection("— STATS —")
+
+    makeSlider("Walk Speed", 16, 300, State.WalkSpeed, function(v) return tostring(v) end, function(v)
+        applySpeed(v)
     end)
 
-    numRow("Jump Power", State.JumpPower, function(n)
-        if n >= 0 and n <= 500 then applyJumpPower(n) end
+    makeSlider("Jump Power", 50, 500, State.JumpPower, function(v) return tostring(v) end, function(v)
+        applyJump(v)
     end)
 
-    -- Quick presets for WalkSpeed
-    do
-        local presetFrame = Instance.new("Frame")
-        presetFrame.Size = UDim2.new(1, -10, 0, 32)
-        presetFrame.BackgroundTransparency = 1
-        presetFrame.Parent = scroll
-        local l = Instance.new("UIListLayout")
-        l.FillDirection = Enum.FillDirection.Horizontal
-        l.Padding = UDim.new(0, 6)
-        l.Parent = presetFrame
-
-        for _, speed in ipairs({16, 50, 100, 200}) do
-            local pb = Instance.new("TextButton")
-            pb.Size = UDim2.new(0, 62, 1, 0)
-            pb.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
-            pb.Text = tostring(speed)
-            pb.TextColor3 = Color3.fromRGB(0, 220, 255)
-            pb.TextSize = 13
-            pb.Font = Enum.Font.GothamBold
-            pb.BorderSizePixel = 0
-            pb.Parent = presetFrame
-            do local c = Instance.new("UICorner") c.CornerRadius = UDim.new(0, 6) c.Parent = pb end
-            pb.MouseButton1Click:Connect(function()
-                applyWalkSpeed(speed)
-                notify("Iron Admin", "WalkSpeed → " .. speed, 2)
-            end)
-        end
-    end
-
-    -- Quick presets for JumpPower
-    do
-        local presetFrame = Instance.new("Frame")
-        presetFrame.Size = UDim2.new(1, -10, 0, 32)
-        presetFrame.BackgroundTransparency = 1
-        presetFrame.Parent = scroll
-        local l = Instance.new("UIListLayout")
-        l.FillDirection = Enum.FillDirection.Horizontal
-        l.Padding = UDim.new(0, 6)
-        l.Parent = presetFrame
-
-        for _, jp in ipairs({50, 100, 200, 350}) do
-            local pb = Instance.new("TextButton")
-            pb.Size = UDim2.new(0, 62, 1, 0)
-            pb.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
-            pb.Text = tostring(jp)
-            pb.TextColor3 = Color3.fromRGB(0, 220, 255)
-            pb.TextSize = 13
-            pb.Font = Enum.Font.GothamBold
-            pb.BorderSizePixel = 0
-            pb.Parent = presetFrame
-            do local c = Instance.new("UICorner") c.CornerRadius = UDim.new(0, 6) c.Parent = pb end
-            pb.MouseButton1Click:Connect(function()
-                applyJumpPower(jp)
-                notify("Iron Admin", "JumpPower → " .. jp, 2)
-            end)
-        end
-    end
-
-    section("COMBAT / VISUAL")
-
-    toggleBtn("🛡 GODMODE (LOCAL)", function(on)
-        State.Godmode = on
-        if on then startGodmode() else stopGodmode() end
+    makeSlider("Fly Speed", 10, 500, State.FlySpeed, function(v) return tostring(v) end, function(v)
+        State.FlySpeed = v
     end)
 
-    toggleBtn("☀ FULLBRIGHT", function(on)
+    makeSection("— VISUAL —")
+
+    makeToggle("☀ FULLBRIGHT", function(on)
         State.Fullbright = on
         if on then startFullbright() else stopFullbright() end
     end)
 
-    toggleBtn("👁 ESP (PLAYERS)", function(on)
+    makeToggle("👁 ESP PLAYERS", function(on)
         State.ESP = on
         if on then startESP() else stopESP() end
     end)
 
-    toggleBtn("❄ FREEZE SELF", function(on)
-        setFrozen(on)
+    makeToggle("🛡 GODMODE (LOCAL)", function(on)
+        State.Godmode = on
+        if on then startGodmode() else stopGodmode() end
     end)
 
-    section("TELEPORT")
+    makeSection("— COORDINATES —")
 
+    -- Copy coords button
+    local copyBtn = Instance.new("TextButton")
+    copyBtn.Size = UDim2.new(1, -8, 0, 34)
+    copyBtn.BackgroundColor3 = Color3.fromRGB(0, 110, 160)
+    copyBtn.Text = "📋 COPY CURRENT XYZ"
+    copyBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    copyBtn.TextSize = 13
+    copyBtn.Font = Enum.Font.GothamBold
+    copyBtn.BorderSizePixel = 0
+    copyBtn.Parent = scroll
+    Instance.new("UICorner", copyBtn).CornerRadius = UDim.new(0, 6)
+    copyBtn.MouseButton1Click:Connect(function()
+        local hrp = getHRP()
+        if hrp then
+            local p = hrp.Position
+            local str = string.format("%.1f, %.1f, %.1f", p.X, p.Y, p.Z)
+            if setclipboard then setclipboard(str) end
+            notify("Copied", str, 2)
+        end
+    end)
+
+    -- Teleport to coords
     local tpBox = Instance.new("TextBox")
-    tpBox.Size = UDim2.new(1, -10, 0, 34)
+    tpBox.Size = UDim2.new(1, -8, 0, 32)
     tpBox.BackgroundColor3 = Color3.fromRGB(30, 30, 44)
     tpBox.Text = "0, 50, 0"
     tpBox.PlaceholderText = "X, Y, Z"
     tpBox.TextColor3 = Color3.fromRGB(0, 220, 255)
-    tpBox.TextSize = 14
-    tpBox.Font = Enum.Font.Gotham
+    tpBox.TextSize = 13
+    tpBox.Font = Enum.Font.Code
     tpBox.BorderSizePixel = 0
-    tpBox.ClearTextOnFocus = false
     tpBox.Parent = scroll
-    do local c = Instance.new("UICorner") c.CornerRadius = UDim.new(0, 6) c.Parent = tpBox end
+    Instance.new("UICorner", tpBox).CornerRadius = UDim.new(0, 6)
 
-    local tpGo = Instance.new("TextButton")
-    tpGo.Size = UDim2.new(1, -10, 0, 36)
-    tpGo.BackgroundColor3 = Color3.fromRGB(0, 120, 180)
-    tpGo.Text = "TELEPORT"
-    tpGo.TextColor3 = Color3.fromRGB(255, 255, 255)
-    tpGo.TextSize = 14
-    tpGo.Font = Enum.Font.GothamBold
-    tpGo.BorderSizePixel = 0
-    tpGo.Parent = scroll
-    do local c = Instance.new("UICorner") c.CornerRadius = UDim.new(0, 6) c.Parent = tpGo end
-
-    tpGo.MouseButton1Click:Connect(function()
-        local nums = {}
-        for s in string.gmatch(tpBox.Text, "([^,]+)") do
-            table.insert(nums, tonumber(s))
-        end
-        if #nums == 3 and nums[1] and nums[2] and nums[3] then
-            teleportTo(nums[1], nums[2], nums[3])
-            notify("Iron Admin", "Teleported", 2)
+    local tpBtn = Instance.new("TextButton")
+    tpBtn.Size = UDim2.new(1, -8, 0, 34)
+    tpBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 180)
+    tpBtn.Text = "🚀 TELEPORT TO XYZ"
+    tpBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    tpBtn.TextSize = 13
+    tpBtn.Font = Enum.Font.GothamBold
+    tpBtn.BorderSizePixel = 0
+    tpBtn.Parent = scroll
+    Instance.new("UICorner", tpBtn).CornerRadius = UDim.new(0, 6)
+    tpBtn.MouseButton1Click:Connect(function()
+        local t = {}
+        for s in string.gmatch(tpBox.Text, "([^,]+)") do t[#t+1] = tonumber(s) end
+        if #t == 3 and t[1] and t[2] and t[3] then
+            teleportTo(t[1], t[2], t[3])
+            notify("Iron Admin", "Teleported!", 2)
         else
-            notify("Iron Admin", "Invalid coords", 2)
+            notify("Iron Admin", "Invalid XYZ", 2)
         end
     end)
 
-    section("UTILITIES")
+    makeSection("— UTILITY —")
 
     local resetBtn = Instance.new("TextButton")
-    resetBtn.Size = UDim2.new(1, -10, 0, 38)
+    resetBtn.Size = UDim2.new(1, -8, 0, 36)
     resetBtn.BackgroundColor3 = Color3.fromRGB(150, 100, 0)
     resetBtn.Text = "🔄 RESET CHARACTER"
-    resetBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    resetBtn.TextSize = 14
+    resetBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    resetBtn.TextSize = 13
     resetBtn.Font = Enum.Font.GothamBold
     resetBtn.BorderSizePixel = 0
     resetBtn.Parent = scroll
-    do local c = Instance.new("UICorner") c.CornerRadius = UDim.new(0, 6) c.Parent = resetBtn end
+    Instance.new("UICorner", resetBtn).CornerRadius = UDim.new(0, 6)
     resetBtn.MouseButton1Click:Connect(function()
-        local hum = getHumanoid()
-        if hum then hum.Health = 0 end
+        local h = getHum(); if h then h.Health = 0 end
     end)
 
     local rejoinBtn = Instance.new("TextButton")
-    rejoinBtn.Size = UDim2.new(1, -10, 0, 38)
+    rejoinBtn.Size = UDim2.new(1, -8, 0, 36)
     rejoinBtn.BackgroundColor3 = Color3.fromRGB(150, 30, 30)
     rejoinBtn.Text = "🚪 REJOIN SERVER"
-    rejoinBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    rejoinBtn.TextSize = 14
+    rejoinBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    rejoinBtn.TextSize = 13
     rejoinBtn.Font = Enum.Font.GothamBold
     rejoinBtn.BorderSizePixel = 0
     rejoinBtn.Parent = scroll
-    do local c = Instance.new("UICorner") c.CornerRadius = UDim.new(0, 6) c.Parent = rejoinBtn end
+    Instance.new("UICorner", rejoinBtn).CornerRadius = UDim.new(0, 6)
     rejoinBtn.MouseButton1Click:Connect(function()
-        pcall(function()
-            TeleportService:Teleport(game.PlaceId, LocalPlayer)
-        end)
+        pcall(function() TeleportService:Teleport(game.PlaceId, LocalPlayer) end)
     end)
 
     local credit = Instance.new("TextLabel")
-    credit.Size = UDim2.new(1, -10, 0, 20)
+    credit.Size = UDim2.new(1, -8, 0, 18)
     credit.BackgroundTransparency = 1
-    credit.Text = "Iron Gate Hub v2 | client-side"
-    credit.TextColor3 = Color3.fromRGB(110, 110, 130)
-    credit.TextSize = 11
+    credit.Text = "Iron Gate Hub v2.0 | Client-side only"
+    credit.TextColor3 = Color3.fromRGB(100,100,120)
+    credit.TextSize = 10
     credit.Font = Enum.Font.Gotham
     credit.Parent = scroll
 
-    -- Toggle / close
-    toggle.MouseButton1Click:Connect(function()
-        panel.Visible = not panel.Visible
-    end)
-    close.MouseButton1Click:Connect(function()
-        panel.Visible = false
+    -- Toggle handlers
+    toggle.MouseButton1Click:Connect(function() panel.Visible = not panel.Visible end)
+    close.MouseButton1Click:Connect(function() panel.Visible = false end)
+
+    -- ================================================================
+    -- LIVE COORDINATE UPDATER
+    -- ================================================================
+    Connections.CoordUpdate = RunService.RenderStepped:Connect(function()
+        local hrp = getHRP()
+        if hrp then
+            local p = hrp.Position
+            UI.CoordLabel.Text = string.format("X: %.1f   Y: %.1f   Z: %.1f", p.X, p.Y, p.Z)
+        else
+            UI.CoordLabel.Text = "X: --  Y: --  Z: --"
+        end
     end)
 end
 
 -- =====================================================================
--- CHARACTER RESPAWN HANDLER
+-- RESPAWN HANDLER
 -- =====================================================================
 LocalPlayer.CharacterAdded:Connect(function()
     task.wait(1)
-    if State.Fly then stopFly() startFly() end
-    if State.Noclip then stopNoclip() startNoclip() end
+    if State.Fly then stopFly(); startFly() end
+    if State.Noclip then stopNoclip(); startNoclip() end
     if State.Godmode then startGodmode() end
-    if State.WalkSpeed ~= 16 then applyWalkSpeed(State.WalkSpeed) end
-    if State.JumpPower ~= 50 then applyJumpPower(State.JumpPower) end
+    if State.WalkSpeed ~= 16 then applySpeed(State.WalkSpeed) end
+    if State.JumpPower ~= 50 then applyJump(State.JumpPower) end
     if State.ESP then
         for _, p in ipairs(Players:GetPlayers()) do createESP(p) end
     end
@@ -738,9 +656,9 @@ end)
 -- =====================================================================
 local ok, err = pcall(createUI)
 if not ok then
-    warn("[IronAdmin] UI failed: " .. tostring(err))
+    warn("[IronAdmin v2] UI failed: " .. tostring(err))
 else
-    notify("Iron Admin Panel v2", "Loaded! Tap ADMIN to open.", 5)
+    notify("Iron Admin v2", "Loaded! Tap 'ADMIN' to open.", 5)
 end
 
-print("[IronAdmin v2] Loaded. Fly, WalkSpeed, JumpPower ready.")
+print("[IronAdmin v2] Panel loaded. Live coords active.")
